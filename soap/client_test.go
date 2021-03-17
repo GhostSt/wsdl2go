@@ -194,6 +194,86 @@ func TestRoundTripWithAction(t *testing.T) {
 	}
 }
 
+func TestRoundTripWithActionAndCustomHeaders(t *testing.T) {
+	type msgT struct{ A, B string }
+	type envT struct{ msgT }
+	echo := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.NotFound(w, r)
+			return
+		}
+		if v := r.Header.Get("X-Test"); v != "true" {
+			http.NotFound(w, r)
+			return
+		}
+		io.Copy(w, r.Body)
+	})
+	s := httptest.NewServer(echo)
+	defer s.Close()
+	pre := func(r *http.Request) {
+		r.Header.Set("X-Test", "true")
+		headerVal1 := r.Header.Get("Test")
+		if headerVal1 != "some val" {
+			t.Fatalf("Header \"%s\" does not equals to \"%s\"", "Test", "some val")
+		}
+		headerVal2 := r.Header.Get("Test2")
+		if headerVal2 != "another val" {
+			t.Fatalf("Header \"%s\" does not equals to \"%s\"", "Test2", "another val")
+		}
+	}
+	cases := []struct {
+		C       *Client
+		Action  string
+		In, Out Message
+		Fail    bool
+	}{
+		{
+			C:      &Client{URL: s.URL, Pre: pre},
+			Action: "hello",
+			In:     &msgT{A: "hello", B: "world"},
+			Out:    &envT{},
+		},
+		{
+			C:      &Client{URL: s.URL, Pre: pre},
+			Action: "foo",
+			In:     &msgT{A: "foo", B: "bar"},
+			Out:    &envT{},
+		},
+		{
+			C:      &Client{URL: "", Pre: pre},
+			Action: "none",
+			Out:    &envT{},
+			Fail:   true,
+		},
+	}
+	for i, tc := range cases {
+		headers := CustomHeaders{
+			Headers: map[string]string{
+				"test" : "some val",
+				"test2": "another val",
+			},
+		}
+		err := tc.C.RoundTripWithActionAndCustomHeaders(tc.Action, headers, tc.In, tc.Out)
+		if err != nil && !tc.Fail {
+			t.Errorf("test %d: %v", i, err)
+			continue
+		}
+		if tc.Fail {
+			continue
+		}
+		env, ok := tc.Out.(*envT)
+		if !ok {
+			t.Errorf("test %d: response to %#v is not an envelope", i, tc.In)
+			continue
+		}
+		if !reflect.DeepEqual(env.msgT, *tc.In.(*msgT)) {
+			t.Errorf("test %d: message mismatch\nwant: %#v\nhave: %#v",
+				i, tc.In, &env.msgT)
+			continue
+		}
+	}
+}
+
 func TestRoundTripSoap12(t *testing.T) {
 	type msgT struct{ A, B string }
 	type envT struct{ msgT }
